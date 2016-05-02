@@ -1,0 +1,268 @@
+<html>
+<!--******************************************************************************************************/
+/** Currency Exchange Web Connector For Tableau															**/
+/** Gets Data From http://api.fixer.io																    **/
+/** Author Alex Ross 																					**/
+/** Version 1.0 					                            										**/
+/*******************************************************************************************************-->
+<meta http-equiv="Cache-Control" content="no-store" />
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="">
+
+    <!-- Title Core CSS -->
+    <title>Currency Exchange Web Data Connector</title>
+
+    <!-- Bootstrap Core CSS -->
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Custom CSS -->
+    <link href="css/stylish-portfolio.css" rel="stylesheet">
+
+    <!-- Custom Fonts -->
+    <link href="font-awesome/css/font-awesome.min.css" rel="stylesheet" type="text/css">
+    <link href="http://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,700,300italic,400italic,700italic" rel="stylesheet" type="text/css">
+
+    <!-- Comment the follwing line in and the line after out if you are not connected to the internet -->
+    <!-- <script src="js/jquery-1.11.1.min.js" type="text/javascript"></script> -->
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js" type="text/javascript"></script>
+    <script src="js/tableauwdc-1.1.0.js" type="text/javascript"></script>
+    <script type="text/javascript">
+        
+        (function() {
+            function init() {
+                tableau.initCallback();
+            }
+
+            function shutdown() {
+                tableau.shutdownCallback();
+            }
+
+			//function to offset current date by x days
+            function addDays(date, days) {
+                return new Date(
+                    date.getFullYear(),
+                    date.getMonth(),
+                    date.getDate() + days,
+                    date.getHours(),
+                    date.getMinutes(),
+                    date.getSeconds(),
+                    date.getMilliseconds()
+                );
+            }
+
+            var myConnector = tableau.makeConnector();
+
+            myConnector.getColumnHeaders = function() {
+                var fieldNames = ['Base', 'Request Date', 'Response Date', 'Currency', 'Rate', 'Request ID'];
+                var fieldTypes = ['string', 'date', 'date', 'string', 'float', 'float'];
+                tableau.headersCallback(fieldNames, fieldTypes); // tell tableau about the fields and their types
+            }
+
+            myConnector.getTableData = function(lastRecordToken) {
+
+                if (!tableau) {
+                    alert("tableau NOT defined!");
+                    return;
+                }
+		
+                var currentTime = new Date();
+				var connectionData = JSON.parse(tableau.connectionData);
+                var baseCurrency = connectionData.baseCurrency;
+				var numberOfDays = parseInt(connectionData.numberOfDays);
+
+                if (lastRecordToken) {
+
+                    //test line to stop after one iteration
+                    //tableau.dataCallback([], lastRecordToken, false);
+                    //return;
+
+                    //parse lastRecordNumber as Integer as Tableau stores this as a string
+                    lastRecordNumber = parseInt(lastRecordToken);
+
+                    //if MAX_DAYS reached or no more results to retrieve then return to Tableau with no data
+                    if (lastRecordNumber >= numberOfDays) {
+                        tableau.dataCallback([], '', false);
+                        return;
+                    }
+
+                } else {
+                    lastRecordNumber = 0;
+                }
+
+				//set date and URL to request
+                var requestDate = new Date();
+                requestDate = addDays(requestDate, -lastRecordNumber);
+                var connectionUrl = _buildUrl(requestDate, baseCurrency);
+				
+				//Make Request
+                var xhr = $.ajax({
+                    url: connectionUrl,
+                    dataType: 'jsonp',
+                    success: function(data) {
+                        var base = data.base;
+                        var date = data.date;
+                        var rates = data.rates;
+                        var toRet = [];
+                        var tempArr = [];
+
+                        for (var prop in rates) {
+                            var pair = {
+                                'Currency': prop,
+                                'Value': rates[prop]
+                            }
+                            tempArr.push(pair);
+                        }
+						
+					//make sure request date is correct
+					var requestDate = new Date();
+					requestDate = addDays(requestDate, -lastRecordNumber);
+						
+					 // Add row for base to base conversion
+						var entry = {
+							'Base': base,
+							'Request Date': requestDate.toISOString().substring(0, 10),
+							'Response Date': date,
+							'Currency': base,
+							'Rate': '1',
+							'Request ID': lastRecordNumber
+						};
+						toRet.push(entry);
+
+                        // mash the data into an Array of objects
+                        for (ii = 0; ii < tempArr.length; ++ii) {
+
+                            // Each entry can be a list of values in the same order as the columns
+                            var entry = {
+                                'Base': base,
+                                'Request Date': requestDate.toISOString().substring(0, 10),
+                                'Response Date': date,
+                                'Currency': tempArr[ii].Currency,
+                                'Rate': tempArr[ii].Value,
+                                'Request ID': lastRecordNumber
+                            };
+                            toRet.push(entry);
+                        }
+
+
+                        // Call back to tableau with the table data
+                        lastRecordNumber = lastRecordNumber + 1;
+                        tableau.dataCallback(toRet, lastRecordNumber.toString(), true);
+                    }
+                });
+            }
+
+            //Builds URL to call api.fixer.io.
+            function _buildUrl(requestDate, baseCurrency) {
+
+                var sDate = requestDate.toISOString().substring(0, 10)
+                var url = 'http://api.fixer.io/' + sDate + '?base=' + baseCurrency;
+                return url;
+            }
+
+            tableau.registerConnector(myConnector);
+
+            $(document).ready(function() {
+                $("#inputForm").submit(function() { // This event fires when a button is clicked
+                    event.preventDefault();
+                    var baseCurrency = inputForm[0].value; // get the Currency Exchange search term
+                    if (!baseCurrency || baseCurrency.length == 0) {
+                        return;
+                    }
+					
+					var numberField = $('input[type=number]'); // get the minimum magnitude entered
+                    if (!numberField || numberField.length == 0) {
+                        return;
+                    }
+					var numberOfDays = numberField[0].value.toString().trim();
+					
+                    var connectionData = {
+                        'baseCurrency': baseCurrency,
+                        'numberOfDays': numberOfDays
+                    }
+                    tableau.connectionData = JSON.stringify(connectionData); // set the Currency Exchange Search Term as the connection data so we can get to it when we fetch the data
+                    tableau.connectionName = 'Currency Exchange Rates For: ' + baseCurrency; // name the data source. This will be the data source name in Tableau
+                    tableau.submit();
+                });
+            });
+        })();
+    </script>
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header id="top" class="header">
+        <div class="text-vertical-center">
+            <h1>Tableau Currency Exchange Search</h1>
+            <br>
+
+            <form id="inputForm" action="">
+                <p class="lead">
+                    Select a base currency:
+                    <select name="baseCurrency" style="width: 150px";>
+						<option value="GBP">GBP</option>
+						<option value="ZAR">ZAR</option>
+						<option value="USD">USD</option>
+						<option value="TRY">TRY</option>
+						<option value="THB">THB</option>
+						<option value="SGD">SGD</option>
+						<option value="SEK">SEK</option>
+						<option value="RUB">RUB</option>
+						<option value="RON">RON</option>
+						<option value="PLN">PLN</option>
+						<option value="PHP">PHP</option>
+						<option value="NZD">NZD</option>
+						<option value="NOK">NOK</option>
+						<option value="MYR">MYR</option>
+						<option value="MXN">MXN</option>
+						<option value="KRW">KRW</option>
+						<option value="JPY">JPY</option>
+						<option value="INR">INR</option>
+						<option value="ILS">ILS</option>
+						<option value="IDR">IDR</option>
+						<option value="HUF">HUF</option>
+						<option value="HRK">HRK</option>
+						<option value="HKD">HKD</option>
+						<option value="EUR">EUR</option>
+						<option value="DKK">DKK</option>
+						<option value="CZK">CZK</option>
+						<option value="CNY">CNY</option>
+						<option value="CHF">CHF</option>
+						<option value="CAD">CAD</option>
+						<option value="BRL">BRL</option>
+						<option value="BGN">BGN</option>
+						<option value="AUD">AUD</option>
+					</select>
+					
+					<br></br>
+					  Number Of Days To Get Data:
+					  <input type="number" name="numberOfDays" id="numberOfDays" min="0" step="1" value="100" style="width: 150px;" />
+                    <br></br>
+					
+                    <p class="lead"> <input class="btn btn-dark btn-lg" type="submit" value="Search Currency Exchange"></p>
+            </form>
+            <!-- About -->
+            <section id="about" class="about">
+                <div class="container">
+                    <div class="row">
+                        <div class="col-lg-12 text-center">
+                            <p class="lead">This Web Data Connector is Powered By <a target="_blank" href="http://fixer.io/">fixer.io</a>.</p>
+                            <p class="lead" id="maxrecords"></p>
+                        </div>
+                    </div>
+                    <!-- /.row -->
+                </div>
+                <!-- /.container -->
+            </section>
+           <!-- <script>
+                document.getElementById("maxrecords").innerHTML = 'Returns ' + MAX_DAYS + ' Days of Exchange Rates';
+            </script>-->
+
+</body>
+
+</html>
